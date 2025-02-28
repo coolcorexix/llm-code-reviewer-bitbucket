@@ -102,6 +102,33 @@ const reviewAllDiffs = async (diffs, bestPracticesPrompt) => {
 
     console.log(formattedDiffs);
     
+    // Define the function that the AI can call
+    const functions = [
+      {
+        name: "submitCodeReview",
+        description: "Submit a code review with comments and a decision",
+        parameters: {
+          type: "object",
+          properties: {
+            review: {
+              type: "string",
+              description: "Detailed review comments about the code changes"
+            },
+            decision: {
+              type: "string",
+              enum: ["APPROVE", "APPROVE_WITH_COMMENTS", "DECLINE"],
+              description: "The final decision on the pull request"
+            },
+            reason: {
+              type: "string",
+              description: "Brief explanation for the decision"
+            }
+          },
+          required: ["review", "decision", "reason"]
+        }
+      }
+    ];
+    
     const response = await axios.post(
       config.ai.endpoint,
       {
@@ -109,13 +136,18 @@ const reviewAllDiffs = async (diffs, bestPracticesPrompt) => {
         messages: [
           {
             role: "system",
-            content: bestPracticesPrompt
+            content: `${bestPracticesPrompt}\n\nAfter reviewing the code, you must submit a code review with comments and a decision. Base your decision on the following criteria:
+- APPROVE: No significant issues found, code is ready to merge
+- APPROVE_WITH_COMMENTS: Minor issues that should be addressed but are not blocking
+- DECLINE: Critical issues or multiple moderate issues that must be fixed before merging`
           },
           {
             role: "user",
             content: `Please review the following code changes from a pull request:\n${formattedDiffs}`
           }
-        ]
+        ],
+        functions: functions,
+        function_call: { name: "submitCodeReview" }
       },
       {
         headers: {
@@ -124,14 +156,27 @@ const reviewAllDiffs = async (diffs, bestPracticesPrompt) => {
         }
       }
     );
-    return response.data.choices[0].message.content;
+    
+    // Extract the function call arguments
+    const functionCall = response.data.choices[0].message.function_call;
+    const args = JSON.parse(functionCall.arguments);
+    
+    // Format the review output
+    const formattedReview = `${args.review}\n\nDECISION: ${args.decision}\nREASON: ${args.reason}`;
+    
+    // Return both the formatted review text and the structured data
+    return {
+      reviewText: formattedReview,
+      decision: args.decision,
+      reason: args.reason
+    };
   } catch (error) {
     console.error('Error getting AI review:', error.message);
     throw error;
   }
 };
 
-// Main function to review a PR
+// Update the reviewPR function to use the structured response
 const reviewPR = async (workspace, repo, prNumber, bestPracticesPrompt) => {
   try {
     // Fetch data in parallel
@@ -146,13 +191,20 @@ const reviewPR = async (workspace, repo, prNumber, bestPracticesPrompt) => {
     console.log('Description:', prDetails.description ?? 'No description provided');
     console.log('\nAI Review Results:\n');
 
-    // Get a single review for all diffs
-    const review = await reviewAllDiffs(diffs, bestPracticesPrompt);
-    console.log(review);
+    // Get a structured review for all diffs
+    const reviewResult = await reviewAllDiffs(diffs, bestPracticesPrompt);
+    console.log(reviewResult.reviewText);
+    
+    console.log('\n========== DECISION ==========');
+    console.log(`Decision: ${reviewResult.decision}`);
+    console.log(`Reason: ${reviewResult.reason}`);
+    console.log('==============================\n');
 
     return {
       prDetails,
-      review
+      review: reviewResult.reviewText,
+      decision: reviewResult.decision,
+      reason: reviewResult.reason
     };
   } catch (error) {
     console.error('Error during PR review:', error.message);
