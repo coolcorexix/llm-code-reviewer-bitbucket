@@ -13,7 +13,8 @@ const config = {
     username: process.env.BITBUCKET_USERNAME,
     password: process.env.BITBUCKET_APP_PASSWORD,
     workspace: process.env.BITBUCKET_WORKSPACE,
-    repo: process.env.BITBUCKET_REPO
+    repo: process.env.BITBUCKET_REPO,
+    baseUrl: process.env.BITBUCKET_BASE_URL
   },
   ai: {
     apiKey: process.env.AI_API_KEY,
@@ -152,7 +153,7 @@ const reviewAllDiffs = async (diffs, bestPracticesPrompt) => {
       {
         headers: {
           'Authorization': `Bearer ${config.ai.apiKey}`,
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
         }
       }
     );
@@ -162,7 +163,7 @@ const reviewAllDiffs = async (diffs, bestPracticesPrompt) => {
     const args = JSON.parse(functionCall.arguments);
     
     // Format the review output
-    const formattedReview = `${args.review}\n\nDECISION: ${args.decision}\nREASON: ${args.reason}`;
+    const formattedReview = `${args.review}\n\nDECISION: ${args.decision}\n\nREASON: ${args.reason}`;
     
     // Return both the formatted review text and the structured data
     return {
@@ -194,11 +195,59 @@ const reviewPR = async (workspace, repo, prNumber, bestPracticesPrompt) => {
     // Get a structured review for all diffs
     const reviewResult = await reviewAllDiffs(diffs, bestPracticesPrompt);
     console.log(reviewResult.reviewText);
+
     
     console.log('\n========== DECISION ==========');
     console.log(`Decision: ${reviewResult.decision}`);
     console.log(`Reason: ${reviewResult.reason}`);
     console.log('==============================\n');
+    const finalComment = `# AI PR Review
+
+${reviewResult.reviewText}
+
+## Decision
+**${reviewResult.decision}**
+
+## Reason
+${reviewResult.reason}`;
+
+    console.log(finalComment);
+
+    // Leave a comment on the PR with the review using axios directly
+    try {
+      const commentResponse = await axios.post(
+        `https://api.bitbucket.org/2.0/repositories/${workspace}/${repo}/pullrequests/${prNumber}/comments`,
+        {
+          content: {
+            raw: finalComment,
+          }
+        },
+        {
+          auth: {
+            username: config.bitbucket.username,
+            password: config.bitbucket.password
+          },
+          headers: {
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+      
+      console.log("Successfully posted comment to PR");
+      console.log(`PR URL: https://bitbucket.org/${workspace}/${repo}/pull-requests/${prNumber}`);
+      console.log(`Comment ID: ${commentResponse.data.id}`);
+    } catch (commentError) {
+      console.error("Error posting comment to PR:", commentError.message);
+      if (commentError.response) {
+        console.error(`Status: ${commentError.response.status}`);
+        console.error(`Status Text: ${commentError.response.statusText}`);
+        console.error("Response data:", commentError.response.data);
+      } else if (commentError.request) {
+        console.error("No response received:", commentError.request);
+      } else {
+        console.error("Error setting up request:", commentError.message);
+      }
+    }
 
     return {
       prDetails,
